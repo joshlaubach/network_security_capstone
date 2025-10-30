@@ -1,0 +1,53 @@
+# .gitignore for Network Security Capstone
+
+# Data directories (datasets can be large)
+data/
+*.csv
+*.parquet
+*.json
+!results/*.csv
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Kaggle credentials
+.kaggle/
+kaggle.json
+
+# Saved models (can be large)
+*.pkl
+*.joblib
+*.h5
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp

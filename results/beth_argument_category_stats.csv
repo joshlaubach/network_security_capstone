@@ -1,0 +1,7 @@
+category,count,avg_enrichment,avg_anomaly_prevalence_%,avg_tfidf_diff
+Memory,1,0.13,0.06,-0.0
+Process,3,0.09,0.56,-0.02
+File/Path,11,0.08,0.58,-0.03
+Other,12,0.06,0.35,-0.03
+Permissions,2,0.05,0.02,-0.0
+Network,1,0.02,0.0,-0.0

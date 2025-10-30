@@ -1,0 +1,8 @@
+Aspect,BETH (Unsupervised),UNSW-NB15 (Supervised)
+Domain,System Call Logs,Network Traffic
+Learning Paradigm,Unsupervised Clustering,Supervised Classification
+Primary Metric,Detection Rate / FPR,ROC-AUC / F1-Score
+Best Model Type,K-Means / GMM (varies by metric),XGBoost / Random Forest
+Key Challenge,Distinguishing subtle anomalies without labels,High dimensionality and class imbalance
+Feature Engineering Impact,Critical - enables distance-based separation,Enhances performance - pair features crucial
+Interpretability,Moderate - cluster centers interpretable,High - feature importances clearly defined
