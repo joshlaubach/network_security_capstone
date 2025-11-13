@@ -117,7 +117,6 @@ Execute notebooks in order:
 2. **02_beth_unsupervised.ipynb** - Anomaly detection with K-Means, DBSCAN, GMM
 3. **03_unsw_supervised.ipynb** - Classification with Logistic Regression, Random Forest, XGBoost
 4. **04_results_comparison.ipynb** - Cross-dataset comparison and final insights
-5. **05_presentation_visuals.ipynb** - Publication-ready figures and final presentation materials
 
 ---
 
