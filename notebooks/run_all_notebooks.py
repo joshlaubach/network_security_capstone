@@ -47,7 +47,7 @@ def run_notebook(notebook_path):
             check=True
         )
         
-        print(f"\n[OK] SUCCESS: {notebook_path.name} completed!")
+        print(f"\nSUCCESS: {notebook_path.name} completed!")
         print(f"Finished: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         return True
         
@@ -86,7 +86,7 @@ def main():
     for nb in NOTEBOOKS:
         nb_path = notebook_dir / nb
         if nb_path.exists():
-            print(f"[OK] Found: {nb}")
+            print(f"Found: {nb}")
         else:
             print(f"[X] Missing: {nb}")
             missing.append(nb)
@@ -138,7 +138,7 @@ def main():
     
     print(f"\nDetailed results:")
     for nb, success in results:
-        status = "[OK] SUCCESS" if success else "[X] FAILED"
+        status = "SUCCESS" if success else "[X] FAILED"
         print(f"  {status}: {nb}")
     
     if failed == 0:

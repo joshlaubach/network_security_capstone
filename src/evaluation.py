@@ -599,7 +599,7 @@ def create_evaluation_report(models_dict, X_test, y_test, report_type='supervise
     # Save if path provided
     if save_path:
         comparison_df.to_csv(save_path, index=False)
-        print(f"\n[INFO] Report saved to {save_path}")
+        print(f"\nReport saved to {save_path}")
     
     return report
 

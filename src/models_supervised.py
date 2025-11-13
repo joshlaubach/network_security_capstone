@@ -239,7 +239,7 @@ class LogisticRegressionClassifier:
         
         self.model.fit(X_scaled, y)
         
-        print(f"[INFO] Logistic Regression fitted")
+        print(f"Logistic Regression fitted")
         print(f"       Penalty: {self.penalty}, C: {self.C}")
         print(f"       Categorical encoding: {self.categorical_encoding} ({len(self.categorical_cols)} cols)")
         print(f"       Scaling: {self.scaler_method}")
@@ -421,7 +421,7 @@ class RandomForestClassifierModel:
         
         self.model.fit(X_encoded, y)
         
-        print(f"[INFO] Random Forest fitted")
+        print(f"Random Forest fitted")
         print(f"       Trees: {self.n_estimators}, Max Depth: {self.max_depth}")
         print(f"       Categorical encoding: {self.categorical_encoding} ({len(self.categorical_cols)} cols)")
         print(f"       Training accuracy: {self.model.score(X_encoded, y):.4f}")
@@ -677,7 +677,7 @@ class XGBoostClassifier:
         else:
             self.model.fit(X_values, y, verbose=verbose)
         
-        print(f"[INFO] XGBoost fitted")
+        print(f"XGBoost fitted")
         print(f"       Estimators: {self.n_estimators}, Learning Rate: {self.learning_rate}")
         print(f"       Max Depth: {self.max_depth}, Gamma: {self.gamma}")
         print(f"       Regularization - L1 (alpha): {self.reg_alpha}, L2 (lambda): {self.reg_lambda}")
@@ -752,26 +752,41 @@ class XGBoostClassifier:
         if self.model is None:
             raise ValueError("Model must be fitted before getting feature importances")
         
-        # Get feature importances
+        # Get feature importances from booster
         importance_dict = self.model.get_booster().get_score(importance_type=importance_type)
         
-        if self.feature_names is None:
-            feature_names = [f'feature_{i}' for i in range(len(importance_dict))]
-        else:
-            feature_names = self.feature_names
+        # Check if any importances were returned
+        if not importance_dict:
+            raise ValueError(f"No feature importances found. Model may not be trained or no splits were made.")
         
-        # Map feature indices to names
-        importances = []
-        for i, name in enumerate(feature_names):
-            key = f'f{i}'
-            importances.append(importance_dict.get(key, 0))
+        # Map XGBoost feature indices to actual feature names (if needed)
+        # XGBoost can return either 'fN' format (f0, f1, ...) or actual feature names
+        feature_importance_list = []
         
-        importance_df = pd.DataFrame({
-            'feature': feature_names,
-            'importance': importances
-        }).sort_values('importance', ascending=False)
+        for key, value in importance_dict.items():
+            # Check if key is in 'fN' format (starts with 'f' followed by digits)
+            if key.startswith('f') and key[1:].isdigit():
+                # Extract index from 'fN' format
+                idx = int(key[1:])
+                if self.feature_names is not None and idx < len(self.feature_names):
+                    feature_name = self.feature_names[idx]
+                else:
+                    feature_name = key  # Fallback to index format
+            else:
+                # Key is already a feature name
+                feature_name = key
+            
+            feature_importance_list.append({
+                'feature': feature_name,
+                'importance': value
+            })
         
-        if plot:
+        importance_df = pd.DataFrame(feature_importance_list)
+        
+        # Sort by importance
+        importance_df = importance_df.sort_values('importance', ascending=False).reset_index(drop=True)
+        
+        if plot and len(importance_df) > 0:
             top_features = importance_df.head(top_n)
             
             plt.figure(figsize=(10, 8))
@@ -780,6 +795,7 @@ class XGBoostClassifier:
             plt.xlabel(f'Importance ({importance_type})', fontsize=12)
             plt.title(f'Top {top_n} Feature Importances - XGBoost ({importance_type})', 
                      fontsize=14, fontweight='bold')
+            plt.gca().invert_yaxis()
             plt.tight_layout()
             plt.show()
         

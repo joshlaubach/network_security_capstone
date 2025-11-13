@@ -93,7 +93,7 @@ def scale_features(X, method='standard', scaler=None):
     Scale features using various methods.
     
     Args:
-        X: Features to scale (DataFrame or array)
+        X: Features to scale (DataFrame, array, or sparse matrix)
         method: Scaling method - 'standard', 'minmax', 'robust', or 'none'
         scaler: Pre-fitted scaler object (optional, for test data)
         
@@ -103,7 +103,11 @@ def scale_features(X, method='standard', scaler=None):
     if method == 'none':
         return X, None
     
+    # Import sparse utilities
+    from scipy import sparse
+    
     is_dataframe = isinstance(X, pd.DataFrame)
+    
     if is_dataframe:
         columns = X.columns
         index = X.index
@@ -116,14 +120,23 @@ def scale_features(X, method='standard', scaler=None):
         index = None
         numeric_cols = None
     
+    # Check if the values we'll be scaling are sparse (after DataFrame extraction)
+    is_sparse = sparse.issparse(X_values)
+    
     if scaler is None:
         # Fit new scaler
         if method == 'standard':
-            scaler = StandardScaler()
+            # For sparse matrices, use with_mean=False to avoid densification
+            scaler = StandardScaler(with_mean=not is_sparse)
         elif method == 'minmax':
             scaler = MinMaxScaler()
         elif method == 'robust':
-            scaler = RobustScaler()
+            # RobustScaler doesn't support sparse matrices well, convert to standard
+            if is_sparse:
+                print("Warning: RobustScaler not ideal for sparse data, using StandardScaler instead")
+                scaler = StandardScaler(with_mean=False)
+            else:
+                scaler = RobustScaler()
         else:
             raise ValueError(f"Unknown scaling method: {method}")
         
@@ -434,7 +447,7 @@ class KMeansAnomalyDetector:
       
     MEMORY-EFFICIENT IMPLEMENTATION:
       - For large datasets (>100K), computes silhouette on subsample
-      - Avoids O(n²) memory for silhouette_score calculation
+      - Avoids O(n) memory for silhouette_score calculation
       - Reduces memory from ~58GB to 2GB for 763K samples
     """
     
@@ -468,16 +481,29 @@ class KMeansAnomalyDetector:
         Fit K-Means on training data (assumed to be mostly normal).
         
         Args:
-            X: Training features (DataFrame with categorical columns as strings)
+            X: Training features (DataFrame with categorical columns as strings, or sparse matrix)
             y: Not used (unsupervised), included for API consistency
         """
-        # Encode categorical features (OneHot for clustering)
-        X_encoded, self.encoder_obj, self.categorical_cols = encode_categoricals_for_clustering(X)
+        # Import sparse utilities
+        from scipy import sparse
+        
+        # Only encode categoricals if X is a DataFrame (not already a sparse matrix)
+        if isinstance(X, pd.DataFrame):
+            X_encoded, self.encoder_obj, self.categorical_cols = encode_categoricals_for_clustering(X)
+        else:
+            # X is already encoded (e.g., sparse matrix from TF-IDF)
+            X_encoded = X
+            self.encoder_obj = None
+            self.categorical_cols = []
         
         # Apply feature scaling
         X_scaled, self.scaler_obj = scale_features(X_encoded, method=self.scaler_method)
         
-        if isinstance(X_scaled, pd.DataFrame):
+        # Convert to dense array if needed (KMeans doesn't support sparse matrices well)
+        if sparse.issparse(X_scaled):
+            print(f"Converting sparse matrix ({X_scaled.shape}) to dense for KMeans...")
+            X_scaled = X_scaled.toarray()
+        elif isinstance(X_scaled, pd.DataFrame):
             X_scaled = X_scaled.values
         
         n_samples = len(X_scaled)
@@ -490,11 +516,11 @@ class KMeansAnomalyDetector:
         self.model.fit(X_scaled)
         
         # Compute silhouette score on subsample if dataset is large
-        # (silhouette_score has O(n²) memory complexity)
+        # (silhouette_score has O(n) memory complexity)
         if n_samples > self.max_silhouette_samples:
-            print(f"[INFO] Dataset has {n_samples:,} samples (>{self.max_silhouette_samples:,})")
+            print(f"Dataset has {n_samples:,} samples (>{self.max_silhouette_samples:,})")
             print(f"       Computing silhouette on {self.max_silhouette_samples:,} subsample")
-            print(f"       (prevents {n_samples**2/1e9:.1f}B distance calculations → OOM)")
+            print(f"       (prevents {n_samples**2/1e9:.1f}B distance calculations -> OOM)")
             
             np.random.seed(self.random_state)
             subsample_idx = np.random.choice(n_samples, self.max_silhouette_samples, replace=False)
@@ -511,63 +537,93 @@ class KMeansAnomalyDetector:
         # Set threshold at (1 - contamination) percentile
         self.threshold = np.percentile(distances, 100 * (1 - self.contamination))
         
-        print(f"[INFO] K-Means fitted with {self.n_clusters} clusters")
-        print(f"[INFO] Silhouette Score: {self.silhouette_score_:.4f}")
-        print(f"[INFO] Anomaly threshold set at {self.threshold:.4f}")
-        print(f"[INFO] Categorical cols encoded: {len(self.categorical_cols)}")
-        print(f"[INFO] Scaling: {self.scaler_method}, Distance: {self.distance_metric}")
+        print(f"K-Means fitted with {self.n_clusters} clusters")
+        print(f"Silhouette Score: {self.silhouette_score_:.4f}")
+        print(f"Anomaly threshold set at {self.threshold:.4f}")
+        print(f"Categorical cols encoded: {len(self.categorical_cols)}")
+        print(f"Scaling: {self.scaler_method}, Distance: {self.distance_metric}")
         
         return self
     
     def _compute_distances(self, X):
         """
-        Compute distance from each point to its assigned cluster center.
-        Uses the specified distance metric.
+        Compute distance from each point to its NEAREST cluster center.
+        
+        CRITICAL: Uses model.transform() which computes distance to ALL cluster centers,
+        then takes minimum. This is the correct anomaly score for K-Means clustering.
+        
+        Note: Only supports euclidean distance (sklearn KMeans default).
+        For other metrics, use manual computation (commented out below).
         """
-        labels = self.model.predict(X)
-        centers = self.model.cluster_centers_
+        from scipy import sparse
         
-        distances = np.zeros(len(X))
+        # Convert sparse to dense if needed
+        if sparse.issparse(X):
+            X = X.toarray()
         
+        # Use sklearn's optimized transform() method
+        # Returns distances to ALL cluster centers, shape (n_samples, n_clusters)
         if self.distance_metric == 'euclidean':
-            for i in range(len(X)):
-                distances[i] = np.linalg.norm(X[i] - centers[labels[i]])
-        elif self.distance_metric == 'manhattan':
-            for i in range(len(X)):
-                distances[i] = np.sum(np.abs(X[i] - centers[labels[i]]))
-        elif self.distance_metric == 'cosine':
-            for i in range(len(X)):
-                dot_product = np.dot(X[i], centers[labels[i]])
-                norm_product = np.linalg.norm(X[i]) * np.linalg.norm(centers[labels[i]])
-                distances[i] = 1 - (dot_product / (norm_product + 1e-10))
+            all_distances = self.model.transform(X)
+            # Anomaly score = distance to NEAREST cluster center
+            distances = np.min(all_distances, axis=1)
         else:
-            raise ValueError(f"Unsupported distance metric: {self.distance_metric}")
+            # Fallback for non-euclidean metrics (slower)
+            labels = self.model.predict(X)
+            centers = self.model.cluster_centers_
+            n_samples = X.shape[0]
+            distances = np.zeros(n_samples)
+            
+            if self.distance_metric == 'manhattan':
+                for i in range(n_samples):
+                    distances[i] = np.sum(np.abs(X[i] - centers[labels[i]]))
+            elif self.distance_metric == 'cosine':
+                for i in range(n_samples):
+                    dot_product = np.dot(X[i], centers[labels[i]])
+                    norm_product = np.linalg.norm(X[i]) * np.linalg.norm(centers[labels[i]])
+                    distances[i] = 1 - (dot_product / (norm_product + 1e-10))
+            else:
+                raise ValueError(f"Unsupported distance metric: {self.distance_metric}")
         
         return distances
     
-    def predict(self, X):
+    def predict(self, X, threshold=None):
         """
         Predict anomaly labels: 0 = normal, 1 = anomaly.
         
         Args:
-            X: Features to predict on (with categorical columns as strings)
+            X: Features to predict on (DataFrame, array, or sparse matrix)
+            threshold (float, optional): A specific distance threshold to use. 
+                                         If None, uses the one from `fit`.
             
         Returns:
             Binary labels (0/1)
         """
-        # Encode categorical features
-        X_encoded, _, _ = encode_categoricals_for_clustering(
-            X, encoder=self.encoder_obj
-        )
+        from scipy import sparse
+        
+        # Only encode categoricals if X is a DataFrame (not already a sparse matrix)
+        if isinstance(X, pd.DataFrame):
+            X_encoded, _, _ = encode_categoricals_for_clustering(
+                X, encoder=self.encoder_obj
+            )
+        else:
+            X_encoded = X
         
         # Apply same scaling as training
         X_scaled, _ = scale_features(X_encoded, method=self.scaler_method, scaler=self.scaler_obj)
         
-        if isinstance(X_scaled, pd.DataFrame):
+        # Convert to dense if needed
+        if sparse.issparse(X_scaled):
+            X_scaled = X_scaled.toarray()
+        elif isinstance(X_scaled, pd.DataFrame):
             X_scaled = X_scaled.values
             
         distances = self._compute_distances(X_scaled)
-        predictions = (distances > self.threshold).astype(int)
+        
+        # Use the provided threshold, or the one from fitting if None
+        active_threshold = threshold if threshold is not None else self.threshold
+        
+        predictions = (distances > active_threshold).astype(int)
         
         return predictions
     
@@ -576,20 +632,28 @@ class KMeansAnomalyDetector:
         Return anomaly scores (higher = more anomalous).
         
         Args:
-            X: Features to score (with categorical columns as strings)
+            X: Features to score (DataFrame, array, or sparse matrix)
             
         Returns:
             Anomaly scores (distance from cluster center)
         """
-        # Encode categorical features
-        X_encoded, _, _ = encode_categoricals_for_clustering(
-            X, encoder=self.encoder_obj
-        )
+        from scipy import sparse
+        
+        # Only encode categoricals if X is a DataFrame (not already a sparse matrix)
+        if isinstance(X, pd.DataFrame):
+            X_encoded, _, _ = encode_categoricals_for_clustering(
+                X, encoder=self.encoder_obj
+            )
+        else:
+            X_encoded = X
         
         # Apply same scaling as training
         X_scaled, _ = scale_features(X_encoded, method=self.scaler_method, scaler=self.scaler_obj)
         
-        if isinstance(X_scaled, pd.DataFrame):
+        # Convert to dense if needed
+        if sparse.issparse(X_scaled):
+            X_scaled = X_scaled.toarray()
+        elif isinstance(X_scaled, pd.DataFrame):
             X_scaled = X_scaled.values
             
         return self._compute_distances(X_scaled)
@@ -640,7 +704,7 @@ class DBSCANAnomalyDetector:
       - Noise points are considered anomalies
       
     MEMORY-EFFICIENT IMPLEMENTATION:
-      - For large datasets (>100K), trains on a subsample to avoid O(n²) memory
+      - For large datasets (>100K), trains on a subsample to avoid O(n) memory
       - Uses NearestNeighbors for prediction on remaining data
       - Reduces memory from ~58GB to 2-8GB for 763K samples
     """
@@ -675,25 +739,38 @@ class DBSCANAnomalyDetector:
         Fit DBSCAN on training data (with memory-efficient subsampling).
         
         Args:
-            X: Training features (DataFrame with categorical columns as strings)
+            X: Training features (DataFrame with categorical columns as strings, or sparse matrix)
             y: Not used (unsupervised)
         """
-        # Encode categorical features
-        X_encoded, self.encoder_obj, self.categorical_cols = encode_categoricals_for_clustering(X)
+        # Import sparse utilities
+        from scipy import sparse
+        
+        # Only encode categoricals if X is a DataFrame (not already a sparse matrix)
+        if isinstance(X, pd.DataFrame):
+            X_encoded, self.encoder_obj, self.categorical_cols = encode_categoricals_for_clustering(X)
+        else:
+            # X is already encoded (e.g., sparse matrix from TF-IDF)
+            X_encoded = X
+            self.encoder_obj = None
+            self.categorical_cols = []
         
         # Apply feature scaling
         X_scaled, self.scaler_obj = scale_features(X_encoded, method=self.scaler_method)
         
-        if isinstance(X_scaled, pd.DataFrame):
+        # Convert to dense array if needed (DBSCAN doesn't support sparse matrices well)
+        if sparse.issparse(X_scaled):
+            print(f"Converting sparse matrix ({X_scaled.shape}) to dense for DBSCAN...")
+            X_scaled = X_scaled.toarray()
+        elif isinstance(X_scaled, pd.DataFrame):
             X_scaled = X_scaled.values
         
         n_samples = len(X_scaled)
         
         # Memory-efficient: subsample if dataset is too large
         if n_samples > self.max_train_samples:
-            print(f"[INFO] Dataset has {n_samples:,} samples (>{self.max_train_samples:,})")
+            print(f"Dataset has {n_samples:,} samples (>{self.max_train_samples:,})")
             print(f"       Subsampling to {self.max_train_samples:,} for DBSCAN training")
-            print(f"       (prevents {n_samples**2/1e9:.1f}B distance calculations → OOM)")
+            print(f"       (prevents {n_samples**2/1e9:.1f}B distance calculations -> OOM)")
             
             np.random.seed(self.random_state)
             subsample_idx = np.random.choice(n_samples, self.max_train_samples, replace=False)
@@ -745,7 +822,7 @@ class DBSCANAnomalyDetector:
         n_clusters = len(set(self.train_labels)) - (1 if -1 in self.train_labels else 0)
         n_noise = list(self.train_labels).count(-1)
         
-        print(f"[INFO] DBSCAN fitted:")
+        print(f"DBSCAN fitted:")
         print(f"       Clusters found: {n_clusters}")
         print(f"       Noise points: {n_noise:,} ({100*n_noise/n_samples:.2f}%)")
         print(f"       Trained on: {len(X_train_subsample):,}/{n_samples:,} samples")
@@ -754,7 +831,7 @@ class DBSCANAnomalyDetector:
         
         return self
     
-    def predict(self, X):
+    def predict(self, X, threshold=None):
         """
         Predict anomaly labels for new data (memory-efficient).
         
@@ -763,20 +840,30 @@ class DBSCANAnomalyDetector:
           - If nearest neighbor is noise or far away, mark as anomaly
         
         Args:
-            X: Features to predict on (with categorical columns as strings)
+            X: Features to predict on (DataFrame, array, or sparse matrix)
+            threshold (float, optional): A specific distance threshold (eps) to use.
+                                         If None, uses the one from `__init__`.
             
         Returns:
             Binary labels (0 = normal, 1 = anomaly)
         """
-        # Encode categorical features
-        X_encoded, _, _ = encode_categoricals_for_clustering(
-            X, encoder=self.encoder_obj
-        )
+        from scipy import sparse
+        
+        # Only encode categoricals if X is a DataFrame (not already a sparse matrix)
+        if isinstance(X, pd.DataFrame):
+            X_encoded, _, _ = encode_categoricals_for_clustering(
+                X, encoder=self.encoder_obj
+            )
+        else:
+            X_encoded = X
         
         # Apply same scaling as training
         X_scaled, _ = scale_features(X_encoded, method=self.scaler_method, scaler=self.scaler_obj)
         
-        if isinstance(X_scaled, pd.DataFrame):
+        # Convert to dense if needed
+        if sparse.issparse(X_scaled):
+            X_scaled = X_scaled.toarray()
+        elif isinstance(X_scaled, pd.DataFrame):
             X_scaled = X_scaled.values
         
         # Use NearestNeighbors instead of fit_predict (memory efficient)
@@ -789,11 +876,15 @@ class DBSCANAnomalyDetector:
         # Get labels of nearest neighbors
         nearest_labels = self.train_labels[indices.flatten()]
         
+        # Use the provided threshold (eps), or the one from initialization if None
+        active_threshold = threshold if threshold is not None else self.eps
+        
         # Mark as anomaly if:
         # 1. Nearest neighbor is noise (-1), OR
-        # 2. Distance to nearest neighbor > eps
-        predictions = np.zeros(len(X_scaled), dtype=int)
-        predictions[(nearest_labels == -1) | (distances.flatten() > self.eps)] = 1
+        # 2. Distance to nearest neighbor > active_threshold
+        n_samples = X_scaled.shape[0]
+        predictions = np.zeros(n_samples, dtype=int)
+        predictions[(nearest_labels == -1) | (distances.flatten() > active_threshold)] = 1
         
         return predictions
     
@@ -801,18 +892,29 @@ class DBSCANAnomalyDetector:
         """
         Return anomaly scores based on distance to nearest cluster (memory-efficient).
         
+        CRITICAL FIX: Returns raw distance to nearest neighbor, NOT normalized by eps.
+        This provides a continuous anomaly score where higher = more anomalous.
+        
         Returns:
             Scores where points far from clusters get high values
         """
-        # Encode categorical features
-        X_encoded, _, _ = encode_categoricals_for_clustering(
-            X, encoder=self.encoder_obj
-        )
+        from scipy import sparse
+        
+        # Only encode categoricals if X is a DataFrame (not already a sparse matrix)
+        if isinstance(X, pd.DataFrame):
+            X_encoded, _, _ = encode_categoricals_for_clustering(
+                X, encoder=self.encoder_obj
+            )
+        else:
+            X_encoded = X
         
         # Apply same scaling as training
         X_scaled, _ = scale_features(X_encoded, method=self.scaler_method, scaler=self.scaler_obj)
         
-        if isinstance(X_scaled, pd.DataFrame):
+        # Convert to dense if needed
+        if sparse.issparse(X_scaled):
+            X_scaled = X_scaled.toarray()
+        elif isinstance(X_scaled, pd.DataFrame):
             X_scaled = X_scaled.values
         
         # Use NearestNeighbors for scoring (memory efficient)
@@ -822,16 +924,10 @@ class DBSCANAnomalyDetector:
         
         distances, indices = nn.kneighbors(X_scaled)
         
-        # Get labels of nearest neighbors
-        nearest_labels = self.train_labels[indices.flatten()]
-        
-        # Score based on:
-        # 1. Distance to nearest neighbor (normalized by eps)
-        # 2. Whether nearest neighbor is noise
-        scores = distances.flatten() / self.eps
-        scores[nearest_labels == -1] = 1.0  # Max score if nearest is noise
-        
-        return scores
+        # Return raw distances as anomaly scores
+        # Higher distance = more anomalous
+        # Do NOT normalize by eps or cap at 1.0 - we need continuous scores for threshold optimization
+        return distances.flatten()
     
     def get_cluster_info(self, X):
         """
@@ -895,16 +991,29 @@ class GMManomalyDetector:
         Fit GMM on training data (with memory-efficient subsampling).
         
         Args:
-            X: Training features (DataFrame with categorical columns as strings)
+            X: Training features (DataFrame with categorical columns as strings, or sparse matrix)
             y: Not used (unsupervised)
         """
-        # Encode categorical features
-        X_encoded, self.encoder_obj, self.categorical_cols = encode_categoricals_for_clustering(X)
+        # Import sparse utilities
+        from scipy import sparse
+        
+        # Only encode categoricals if X is a DataFrame (not already a sparse matrix)
+        if isinstance(X, pd.DataFrame):
+            X_encoded, self.encoder_obj, self.categorical_cols = encode_categoricals_for_clustering(X)
+        else:
+            # X is already encoded (e.g., sparse matrix from TF-IDF)
+            X_encoded = X
+            self.encoder_obj = None
+            self.categorical_cols = []
         
         # Apply feature scaling
         X_scaled, self.scaler_obj = scale_features(X_encoded, method=self.scaler_method)
         
-        if isinstance(X_scaled, pd.DataFrame):
+        # Convert to dense array if needed (GMM doesn't support sparse matrices)
+        if sparse.issparse(X_scaled):
+            print(f"Converting sparse matrix ({X_scaled.shape}) to dense for GMM...")
+            X_scaled = X_scaled.toarray()
+        elif isinstance(X_scaled, pd.DataFrame):
             X_scaled = X_scaled.values
         
         n_samples = len(X_scaled)
@@ -913,7 +1022,7 @@ class GMManomalyDetector:
         # GMM with 'full' covariance computes n_features x n_features covariance matrices
         # for each component during EM iterations (memory intensive)
         if n_samples > self.max_train_samples:
-            print(f"[INFO] Dataset has {n_samples:,} samples (>{self.max_train_samples:,})")
+            print(f"Dataset has {n_samples:,} samples (>{self.max_train_samples:,})")
             print(f"       Subsampling to {self.max_train_samples:,} for GMM training")
             print(f"       (reduces EM iteration memory for '{self.covariance_type}' covariance)")
             
@@ -934,53 +1043,66 @@ class GMManomalyDetector:
         self.model.fit(X_train_subsample)
         
         # Compute log-likelihood scores for FULL training data
-        # (score_samples is O(n) not O(n²), so safe to use full dataset)
+        # (score_samples is O(n) not O(n), so safe to use full dataset)
         log_likelihoods = self.model.score_samples(X_scaled)
         
         # Set threshold at contamination percentile
         # Lower log-likelihood = more anomalous
         self.threshold = np.percentile(log_likelihoods, 100 * self.contamination)
         
-        print(f"[INFO] GMM fitted with {self.n_components} components")
-        print(f"[INFO] Trained on: {len(X_train_subsample):,}/{n_samples:,} samples")
-        print(f"[INFO] Log-likelihood threshold: {self.threshold:.4f}")
-        print(f"[INFO] Covariance type: {self.covariance_type}")
-        print(f"[INFO] Categorical cols encoded: {len(self.categorical_cols)}")
-        print(f"[INFO] Scaling: {self.scaler_method}")
+        print(f"GMM fitted with {self.n_components} components")
+        print(f"Trained on: {len(X_train_subsample):,}/{n_samples:,} samples")
+        print(f"Log-likelihood threshold: {self.threshold:.4f}")
+        print(f"Covariance type: {self.covariance_type}")
+        print(f"Categorical cols encoded: {len(self.categorical_cols)}")
+        print(f"Scaling: {self.scaler_method}")
         
         # Check convergence
         if self.model.converged_:
-            print(f"[INFO] GMM converged in {self.model.n_iter_} iterations")
+            print(f"GMM converged in {self.model.n_iter_} iterations")
         else:
             print(f"[WARN] GMM did not converge!")
         
         return self
     
-    def predict(self, X):
+    def predict(self, X, threshold=None):
         """
         Predict anomaly labels: 0 = normal, 1 = anomaly.
         
         Args:
-            X: Features to predict on (with categorical columns as strings)
+            X: Features to predict on (DataFrame, array, or sparse matrix)
+            threshold (float, optional): A specific log-likelihood threshold to use.
+                                         If None, uses the one from `fit`.
             
         Returns:
             Binary labels
         """
-        # Encode categorical features
-        X_encoded, _, _ = encode_categoricals_for_clustering(
-            X, encoder=self.encoder_obj
-        )
+        from scipy import sparse
+        
+        # Only encode categoricals if X is a DataFrame (not already a sparse matrix)
+        if isinstance(X, pd.DataFrame):
+            X_encoded, _, _ = encode_categoricals_for_clustering(
+                X, encoder=self.encoder_obj
+            )
+        else:
+            X_encoded = X
         
         # Apply same scaling as training
         X_scaled, _ = scale_features(X_encoded, method=self.scaler_method, scaler=self.scaler_obj)
         
-        if isinstance(X_scaled, pd.DataFrame):
+        # Convert to dense if needed
+        if sparse.issparse(X_scaled):
+            X_scaled = X_scaled.toarray()
+        elif isinstance(X_scaled, pd.DataFrame):
             X_scaled = X_scaled.values
             
         log_likelihoods = self.model.score_samples(X_scaled)
         
+        # Use the provided threshold, or the one from fitting if None
+        active_threshold = threshold if threshold is not None else self.threshold
+        
         # Points with log-likelihood below threshold are anomalies
-        predictions = (log_likelihoods < self.threshold).astype(int)
+        predictions = (log_likelihoods < active_threshold).astype(int)
         
         return predictions
     
@@ -990,20 +1112,28 @@ class GMManomalyDetector:
         Higher scores = more anomalous.
         
         Args:
-            X: Features to score (with categorical columns as strings)
+            X: Features to score (DataFrame, array, or sparse matrix)
             
         Returns:
             Anomaly scores
         """
-        # Encode categorical features
-        X_encoded, _, _ = encode_categoricals_for_clustering(
-            X, encoder=self.encoder_obj
-        )
+        from scipy import sparse
+        
+        # Only encode categoricals if X is a DataFrame (not already a sparse matrix)
+        if isinstance(X, pd.DataFrame):
+            X_encoded, _, _ = encode_categoricals_for_clustering(
+                X, encoder=self.encoder_obj
+            )
+        else:
+            X_encoded = X
         
         # Apply same scaling as training
         X_scaled, _ = scale_features(X_encoded, method=self.scaler_method, scaler=self.scaler_obj)
         
-        if isinstance(X_scaled, pd.DataFrame):
+        # Convert to dense if needed
+        if sparse.issparse(X_scaled):
+            X_scaled = X_scaled.toarray()
+        elif isinstance(X_scaled, pd.DataFrame):
             X_scaled = X_scaled.values
             
         # Return negative log-likelihood so higher = more anomalous
@@ -1129,29 +1259,35 @@ def train_all_models(X_train, contamination=0.05, random_state=42,
     return models
 
 
-def get_predictions_all_models(models, X_test):
+def get_predictions_all_models(models, X_test, thresholds=None):
     """
-    Get predictions from all trained models.
+    Get predictions from all trained models, using optimized thresholds if provided.
     
     Args:
-        models: Dictionary of trained models
-        X_test: Test features
+        models (dict): Dictionary of trained models.
+        X_test: Test features.
+        thresholds (dict, optional): Dictionary of optimized thresholds, 
+                                     e.g., {'kmeans': 1.23, 'gmm': -4.56}.
         
     Returns:
-        Dictionary of predictions and scores
+        Dictionary of predictions and scores.
     """
     results = {}
+    thresholds = thresholds or {}
     
     for name, model in models.items():
+        # Get the specific threshold for this model, or None if not provided
+        model_threshold = thresholds.get(name)
+        
         results[name] = {
-            'predictions': model.predict(X_test),
+            'predictions': model.predict(X_test, threshold=model_threshold),
             'scores': model.decision_function(X_test)
         }
     
     return results
 
 
-def analyze_sus_vs_evil(models, X_test, y_sus, y_evil):
+def analyze_sus_vs_evil(models, X_test, y_sus, y_evil, thresholds=None):
     """
     Analyze how well each model distinguishes 'sus' vs 'evil' outliers.
     
@@ -1160,14 +1296,19 @@ def analyze_sus_vs_evil(models, X_test, y_sus, y_evil):
         X_test: Test features
         y_sus: Binary labels for 'sus' (in-distribution outliers)
         y_evil: Binary labels for 'evil' (out-of-distribution outliers)
+        thresholds (dict, optional): Dictionary of optimized thresholds to use for prediction.
         
     Returns:
         DataFrame with detection rates for each model and outlier type
     """
     results = []
+    thresholds = thresholds or {}
     
     for name, model in models.items():
-        preds = model.predict(X_test)
+        # Get the specific threshold for this model, or None if not provided
+        model_threshold = thresholds.get(name)
+        
+        preds = model.predict(X_test, threshold=model_threshold)
         scores = model.decision_function(X_test)
         
         # Convert to numpy if needed
@@ -1212,3 +1353,532 @@ def analyze_sus_vs_evil(models, X_test, y_sus, y_evil):
     print("="*60 + "\n")
     
     return df
+
+
+def optimize_threshold_for_target(scores, y_true, model_name, lower_bound, upper_bound, metric='f1', target_name='sus'):
+    """
+    Find the optimal threshold that maximizes a given metric for a specific target.
+    
+    Args:
+        scores (np.array): Anomaly scores where higher is more anomalous.
+        y_true (np.array): True binary labels (0 or 1).
+        model_name (str): Name of the model for display.
+        lower_bound (float): The lower bound for the threshold search.
+        upper_bound (float): The upper bound for the threshold search.
+        metric (str): The metric to optimize ('f1', 'precision', 'recall', 'accuracy').
+        target_name (str): Name of the target for display purposes.
+        
+    Returns:
+        dict: A dictionary containing the best threshold and associated metrics.
+    """
+    from sklearn.metrics import f1_score, precision_score, recall_score, accuracy_score
+    
+    best_metric_val = -1
+    best_threshold = -1
+    best_metrics = {}
+
+    # Use a fixed number of thresholds (100) for efficiency
+    # This is much faster than testing every integer in the range
+    n_thresholds = 100
+    thresholds = np.linspace(lower_bound, upper_bound, n_thresholds)
+    
+    print(f"Optimizing '{model_name}' for '{target_name}': testing {len(thresholds)} thresholds...")
+
+    for threshold in thresholds:
+        y_pred = (scores > threshold).astype(int)
+        
+        # Ensure there are both predicted classes to avoid errors
+        if len(np.unique(y_pred)) < 2:
+            continue
+        
+        # Calculate all metrics
+        f1 = f1_score(y_true, y_pred, zero_division=0)
+        precision = precision_score(y_true, y_pred, zero_division=0)
+        recall = recall_score(y_true, y_pred, zero_division=0)
+        accuracy = accuracy_score(y_true, y_pred)
+        
+        metric_map = {
+            'f1': f1,
+            'precision': precision,
+            'recall': recall,
+            'accuracy': accuracy
+        }
+        
+        current_metric_val = metric_map.get(metric)
+        
+        if current_metric_val > best_metric_val:
+            best_metric_val = current_metric_val
+            best_threshold = threshold
+            best_metrics = {
+                'f1': f1,
+                'precision': precision,
+                'recall': recall,
+                'accuracy': accuracy,
+                'threshold': threshold
+            }
+
+    if not best_metrics:
+        print(f"Warning: Could not find an optimal threshold for {model_name} on {target_name}.")
+        return {
+            'f1': 0, 'precision': 0, 'recall': 0, 'accuracy': 0, 'threshold': np.mean(scores)
+        }
+        
+    print(f"\nOptimal threshold for '{model_name}' on '{target_name}' (optimized for '{metric}'):")
+    print(f"  Threshold: {best_metrics['threshold']:.4f}")
+    print(f"  F1-Score:  {best_metrics['f1']:.4f}")
+    print(f"  Precision: {best_metrics['precision']:.4f}")
+    print(f"  Recall:    {best_metrics['recall']:.4f}")
+    print(f"  Accuracy:  {best_metrics['accuracy']:.4f}")
+
+    return best_metrics
+
+
+def analyze_threshold_performance(scores, y_true, model_name, val_optimized_threshold=None):
+    """
+    Performs a comprehensive analysis of anomaly score thresholds and visualizes performance.
+
+    Args:
+        scores (np.array): Anomaly scores where higher is more anomalous.
+        y_true (np.array): True binary labels (0 or 1).
+        model_name (str): Name of the model for plotting titles.
+        val_optimized_threshold (float, optional): A pre-optimized threshold (e.g., from a validation set)
+                                                   to compare against. Defaults to None.
+    """
+    from sklearn.metrics import confusion_matrix, precision_score, recall_score, f1_score, accuracy_score
+
+    print("="*80)
+    print(f"COMPREHENSIVE THRESHOLD ANALYSIS - {model_name.upper()}")
+    print("="*80)
+
+    # Calculate metrics across a range of thresholds
+    threshold_range = np.linspace(np.percentile(scores, 1), np.percentile(scores, 99), 200)
+    
+    results_detailed = []
+    for threshold in threshold_range:
+        y_pred = (scores > threshold).astype(int)
+        
+        if len(np.unique(y_pred)) < 2:
+            continue
+
+        tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+        
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+
+        results_detailed.append({
+            'threshold': threshold,
+            'accuracy': (tp + tn) / (tp + tn + fp + fn),
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'fpr': fp / (fp + tn) if (fp + tn) > 0 else 0,
+            'tp': tp, 'fp': fp, 'tn': tn, 'fn': fn
+        })
+
+    results_df = pd.DataFrame(results_detailed)
+    if results_df.empty:
+        print(f"Could not generate performance analysis for {model_name}. All thresholds resulted in single-class predictions.")
+        return
+
+    # Find best F1-score threshold from the detailed analysis
+    best_f1_idx = results_df['f1'].idxmax()
+    best_f1_threshold = results_df.loc[best_f1_idx, 'threshold']
+
+    print(f"\n[{model_name.upper()} THRESHOLD RECOMMENDATIONS]")
+    print(f"\n1. Best F1-Score Threshold: {best_f1_threshold:.2f}")
+    print(f"   F1:        {results_df.loc[best_f1_idx, 'f1']:.4f}")
+    print(f"   Precision: {results_df.loc[best_f1_idx, 'precision']:.4f}")
+    print(f"   Recall:    {results_df.loc[best_f1_idx, 'recall']:.4f}")
+    print(f"   FPR:       {results_df.loc[best_f1_idx, 'fpr']:.4f}")
+
+    if val_optimized_threshold:
+        y_pred_val = (scores > val_optimized_threshold).astype(int)
+        f1_val = f1_score(y_true, y_pred_val, zero_division=0)
+        recall_val = recall_score(y_true, y_pred_val, zero_division=0)
+        print(f"\n2. Validation-Optimized Threshold: {val_optimized_threshold:.2f}")
+        print(f"   (Performance on this data: F1={f1_val:.4f}, Recall={recall_val:.4f})")
+
+    # Create 4-panel visualization
+    fig, axs = plt.subplots(2, 2, figsize=(16, 12))
+    axs = axs.flatten()
+    fig.suptitle(f'Threshold Performance Analysis for {model_name}', fontsize=16, fontweight='bold')
+
+    # Plot 1: Precision, Recall, F1-Score vs Threshold
+    axs[0].plot(results_df['threshold'], results_df['precision'], label='Precision', color='blue', linewidth=2)
+    axs[0].plot(results_df['threshold'], results_df['recall'], label='Recall', color='green', linewidth=2)
+    axs[0].plot(results_df['threshold'], results_df['f1'], label='F1-Score', color='red', linewidth=2)
+    axs[0].axvline(x=best_f1_threshold, color='red', linestyle='--', alpha=0.7, label=f'Best F1: {best_f1_threshold:.1f}')
+    if val_optimized_threshold:
+        axs[0].axvline(x=val_optimized_threshold, color='orange', linestyle='--', alpha=0.7, label=f'Val-Opt: {val_optimized_threshold:.1f}')
+    axs[0].set_xlabel('Threshold', fontsize=12)
+    axs[0].set_ylabel('Score', fontsize=12)
+    axs[0].set_title('Precision, Recall, F1 vs Threshold', fontsize=14)
+    axs[0].legend(fontsize=10)
+    axs[0].grid(True, alpha=0.3)
+
+    # Plot 2: Accuracy and FPR vs Threshold
+    ax2 = axs[1]
+    ax2.plot(results_df['threshold'], results_df['accuracy'], label='Accuracy', color='purple', linewidth=2)
+    ax2.set_xlabel('Threshold', fontsize=12)
+    ax2.set_ylabel('Accuracy', fontsize=12, color='purple')
+    ax2.tick_params(axis='y', labelcolor='purple')
+    ax2.axvline(x=best_f1_threshold, color='red', linestyle='--', alpha=0.7)
+    ax2_twin = ax2.twinx()
+    ax2_twin.plot(results_df['threshold'], results_df['fpr'] * 100, label='FPR', color='orange', linewidth=2)
+    ax2_twin.set_ylabel('False Positive Rate (%)', fontsize=12, color='orange')
+    ax2_twin.tick_params(axis='y', labelcolor='orange')
+    ax2.set_title('Accuracy and FPR vs Threshold', fontsize=14)
+    ax2.grid(True, alpha=0.3)
+
+    # Plot 3: True/False Positives vs Threshold
+    axs[2].plot(results_df['threshold'], results_df['tp'], label='True Positives', color='green', linewidth=2)
+    axs[2].plot(results_df['threshold'], results_df['fp'], label='False Positives', color='red', linewidth=2)
+    axs[2].axvline(x=best_f1_threshold, color='red', linestyle='--', alpha=0.7)
+    axs[2].set_xlabel('Threshold', fontsize=12)
+    axs[2].set_ylabel('Count', fontsize=12)
+    axs[2].set_title('TP and FP Counts vs Threshold', fontsize=14)
+    axs[2].legend(fontsize=10)
+    axs[2].grid(True, alpha=0.3)
+
+    # Plot 4: Score Distribution with Threshold Lines
+    normal_scores = scores[y_true == 0]
+    anomaly_scores = scores[y_true == 1]
+    axs[3].hist(normal_scores, bins=100, alpha=0.6, label='Normal', color='green', density=True)
+    axs[3].hist(anomaly_scores, bins=100, alpha=0.6, label='Anomaly', color='red', density=True)
+    axs[3].axvline(x=best_f1_threshold, color='red', linestyle='-', linewidth=2, label=f'Best F1: {best_f1_threshold:.1f}')
+    if val_optimized_threshold:
+        axs[3].axvline(x=val_optimized_threshold, color='orange', linestyle='--', linewidth=2, label=f'Val-Opt: {val_optimized_threshold:.1f}')
+    axs[3].set_xlabel('Anomaly Score', fontsize=12)
+    axs[3].set_ylabel('Density', fontsize=12)
+    axs[3].set_title('Score Distribution with Thresholds', fontsize=14)
+    axs[3].set_xlim([results_df['threshold'].min(), results_df['threshold'].max()])
+    axs[3].legend(fontsize=10)
+    axs[3].grid(True, alpha=0.3)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.show()
+    print("\n" + "="*80)
+    
+    return results_df
+
+
+def plot_roc_curve_analysis(y_true, scores, model_name, f1_opt_threshold, f1_opt_fpr, f1_opt_recall):
+    """
+    Analyzes and visualizes the ROC curve for anomaly detection performance.
+
+    Args:
+        y_true (np.array): True binary labels.
+        scores (np.array): Anomaly scores where higher is more anomalous.
+        model_name (str): Name of the model for titles.
+        f1_opt_threshold (float): The threshold previously optimized for the best F1-score.
+        f1_opt_fpr (float): The False Positive Rate at the F1-optimized threshold.
+        f1_opt_recall (float): The True Positive Rate (Recall) at the F1-optimized threshold.
+    """
+    from sklearn.metrics import roc_curve, roc_auc_score
+
+    print("="*80)
+    print(f"ROC CURVE ANALYSIS - {model_name.upper()}")
+    print("="*80)
+
+    # Compute ROC curve and AUC score
+    fpr_roc, tpr_roc, thresholds_roc = roc_curve(y_true, scores)
+    auc_score = roc_auc_score(y_true, scores)
+
+    print(f"\n[ROC-AUC Analysis]")
+    print(f"  AUC Score: {auc_score:.4f}")
+    print(f"  Interpretation: {'Excellent' if auc_score > 0.9 else 'Good' if auc_score > 0.8 else 'Fair'} discrimination")
+
+    # Find optimal threshold on ROC curve (Youden's J statistic)
+    j_scores = tpr_roc - fpr_roc
+    optimal_idx = np.argmax(j_scores)
+    optimal_roc_threshold = thresholds_roc[optimal_idx]
+    optimal_tpr = tpr_roc[optimal_idx]
+    optimal_fpr = fpr_roc[optimal_idx]
+
+    print(f"\n[Optimal Threshold by ROC (Youden's J)]")
+    print(f"  Threshold: {optimal_roc_threshold:.2f}")
+    print(f"  TPR (Recall): {optimal_tpr:.4f}")
+    print(f"  FPR: {optimal_fpr:.4f}")
+
+    print(f"\n[Comparison: F1-Optimal vs. ROC-Optimal]")
+    print(f"  F1-Optimal (Threshold={f1_opt_threshold:.2f}):")
+    print(f"    - Recall: {f1_opt_recall:.4f}, FPR: {f1_opt_fpr:.4f}")
+    print(f"  ROC-Optimal (Threshold={optimal_roc_threshold:.2f}):")
+    print(f"    - Recall: {optimal_tpr:.4f}, FPR: {optimal_fpr:.4f}")
+
+    # Visualize ROC Curve
+    fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+    ax.plot(fpr_roc, tpr_roc, color='blue', lw=2, label=f'{model_name} ROC (AUC = {auc_score:.4f})')
+    ax.plot([0, 1], [0, 1], color='gray', lw=2, linestyle='--', label='Random Classifier')
+    ax.scatter([optimal_fpr], [optimal_tpr], color='red', s=200, marker='*', 
+               edgecolor='black', linewidth=1.5, zorder=5, 
+               label=f'ROC-Optimal (Thresh={optimal_roc_threshold:.1f})')
+    ax.scatter([f1_opt_fpr], [f1_opt_recall], color='orange', s=150, marker='D',
+               edgecolor='black', linewidth=1.5, zorder=5,
+               label=f'F1-Optimal (Thresh={f1_opt_threshold:.1f})')
+    
+    ax.set_xlabel('False Positive Rate', fontsize=13, fontweight='bold')
+    ax.set_ylabel('True Positive Rate (Recall)', fontsize=13, fontweight='bold')
+    ax.set_title(f'ROC Curve: {model_name} Anomaly Detection', fontsize=15, fontweight='bold')
+    ax.legend(fontsize=11, loc='lower right')
+    ax.grid(True, alpha=0.4)
+    ax.set_xlim([-0.05, 1.05])
+    ax.set_ylim([-0.05, 1.05])
+
+    plt.tight_layout()
+    plt.show()
+    print("\n" + "="*80)
+
+
+def tune_dbscan(X, eps_range=[0.5, 1.0, 1.5, 2.0], min_samples_range=[5, 10, 15, 20], 
+                metric='euclidean', plot=True):
+    """
+    Tune DBSCAN hyperparameters using silhouette score and cluster statistics.
+    
+    Args:
+        X: Feature matrix (can be sparse)
+        eps_range: List of epsilon values to try
+        min_samples_range: List of min_samples values to try
+        metric: Distance metric to use
+        plot: Whether to display visualization
+        
+    Returns:
+        Dictionary with tuning results and best parameters
+    """
+    if isinstance(X, pd.DataFrame):
+        X = X.values
+    
+    # Get number of samples (works for both sparse and dense)
+    n_samples = X.shape[0]
+    
+    print("\n" + "="*60)
+    print("DBSCAN Hyperparameter Tuning")
+    print("="*60)
+    
+    results = []
+    
+    for eps in eps_range:
+        for min_samples in min_samples_range:
+            dbscan = DBSCAN(eps=eps, min_samples=min_samples, metric=metric)
+            labels = dbscan.fit_predict(X)
+            
+            n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+            n_noise = list(labels).count(-1)
+            
+            # Only compute silhouette if we have valid clusters
+            if n_clusters > 1 and n_clusters < n_samples - 1:
+                # Filter out noise points for silhouette calculation
+                mask = labels != -1
+                if mask.sum() > 0:
+                    try:
+                        sil_score = silhouette_score(X[mask], labels[mask])
+                    except:
+                        sil_score = -1
+                else:
+                    sil_score = -1
+            else:
+                sil_score = -1
+            
+            results.append({
+                'eps': eps,
+                'min_samples': min_samples,
+                'n_clusters': n_clusters,
+                'n_noise': n_noise,
+                'noise_ratio': n_noise / n_samples,
+                'silhouette': sil_score
+            })
+            
+            print(f"eps={eps:.1f}, min_samples={min_samples:2d} | "
+                  f"Clusters: {n_clusters:2d} | Noise: {n_noise:5d} ({100*n_noise/n_samples:5.1f}%) | "
+                  f"Silhouette: {sil_score:6.3f}")
+    
+    results_df = pd.DataFrame(results)
+    
+    # Find best parameters (prioritize silhouette, then minimize noise ratio)
+    valid_results = results_df[results_df['silhouette'] > 0]
+    
+    if len(valid_results) > 0:
+        # Best by silhouette score
+        best_idx = valid_results['silhouette'].idxmax()
+        best_params = results_df.loc[best_idx]
+        
+        print("\n" + "="*60)
+        print("Best Parameters (by Silhouette Score):")
+        print(f"  eps = {best_params['eps']}")
+        print(f"  min_samples = {int(best_params['min_samples'])}")
+        print(f"  n_clusters = {int(best_params['n_clusters'])}")
+        print(f"  noise_ratio = {best_params['noise_ratio']:.3f}")
+        print(f"  silhouette = {best_params['silhouette']:.3f}")
+        print("="*60 + "\n")
+    else:
+        print("\n  Warning: No valid clustering found. Try adjusting parameter ranges.")
+        best_params = results_df.iloc[0]
+    
+    if plot:
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        
+        # Pivot for heatmap
+        pivot_sil = results_df.pivot(index='eps', columns='min_samples', values='silhouette')
+        pivot_noise = results_df.pivot(index='eps', columns='min_samples', values='noise_ratio')
+        
+        # Plot 1: Silhouette scores
+        im1 = axes[0].imshow(pivot_sil.values, cmap='viridis', aspect='auto')
+        axes[0].set_xticks(range(len(pivot_sil.columns)))
+        axes[0].set_yticks(range(len(pivot_sil.index)))
+        axes[0].set_xticklabels(pivot_sil.columns)
+        axes[0].set_yticklabels(pivot_sil.index)
+        axes[0].set_xlabel('min_samples')
+        axes[0].set_ylabel('eps')
+        axes[0].set_title('Silhouette Score', fontweight='bold')
+        plt.colorbar(im1, ax=axes[0])
+        
+        # Plot 2: Noise ratio
+        im2 = axes[1].imshow(pivot_noise.values, cmap='RdYlGn_r', aspect='auto')
+        axes[1].set_xticks(range(len(pivot_noise.columns)))
+        axes[1].set_yticks(range(len(pivot_noise.index)))
+        axes[1].set_xticklabels(pivot_noise.columns)
+        axes[1].set_yticklabels(pivot_noise.index)
+        axes[1].set_xlabel('min_samples')
+        axes[1].set_ylabel('eps')
+        axes[1].set_title('Noise Ratio', fontweight='bold')
+        plt.colorbar(im2, ax=axes[1])
+        
+        plt.tight_layout()
+        plt.show()
+    
+    return {
+        'results_df': results_df,
+        'best_params': best_params.to_dict(),
+        'best_eps': best_params['eps'],
+        'best_min_samples': int(best_params['min_samples'])
+    }
+
+
+def tune_gmm(X, n_components_range=range(2, 11), 
+             covariance_types=['full', 'tied', 'diag', 'spherical'],
+             random_state=42, plot=True):
+    """
+    Tune GMM hyperparameters using BIC and AIC scores.
+    
+    Args:
+        X: Feature matrix (must be dense for GMM)
+        n_components_range: Range of component numbers to try
+        covariance_types: List of covariance types to try
+        random_state: Random seed
+        plot: Whether to display visualization
+        
+    Returns:
+        Dictionary with tuning results and best parameters
+    """
+    if isinstance(X, pd.DataFrame):
+        X = X.values
+    
+    # Convert sparse to dense if needed
+    if hasattr(X, 'toarray'):
+        print("Converting sparse matrix to dense for GMM...")
+        X = X.toarray()
+    
+    print("\n" + "="*60)
+    print("GMM Hyperparameter Tuning")
+    print("="*60)
+    
+    results = []
+    
+    for n_components in n_components_range:
+        for cov_type in covariance_types:
+            try:
+                gmm = GaussianMixture(n_components=n_components, 
+                                     covariance_type=cov_type,
+                                     random_state=random_state,
+                                     n_init=10)
+                gmm.fit(X)
+                
+                bic = gmm.bic(X)
+                aic = gmm.aic(X)
+                
+                # Try to compute silhouette if possible
+                try:
+                    labels = gmm.predict(X)
+                    sil_score = silhouette_score(X, labels)
+                except:
+                    sil_score = np.nan
+                
+                results.append({
+                    'n_components': n_components,
+                    'covariance_type': cov_type,
+                    'bic': bic,
+                    'aic': aic,
+                    'silhouette': sil_score,
+                    'converged': gmm.converged_
+                })
+                
+                print(f"n_components={n_components:2d}, cov_type={cov_type:10s} | "
+                      f"BIC: {bic:12.2f} | AIC: {aic:12.2f} | "
+                      f"Silhouette: {sil_score:6.3f} | Converged: {gmm.converged_}")
+                
+            except Exception as e:
+                print(f"n_components={n_components:2d}, cov_type={cov_type:10s} | Failed: {str(e)}")
+    
+    results_df = pd.DataFrame(results)
+    
+    # Find best parameters (lowest BIC is preferred for model selection)
+    converged_results = results_df[results_df['converged'] == True]
+    
+    if len(converged_results) > 0:
+        best_idx_bic = converged_results['bic'].idxmin()
+        best_params_bic = results_df.loc[best_idx_bic]
+        
+        best_idx_aic = converged_results['aic'].idxmin()
+        best_params_aic = results_df.loc[best_idx_aic]
+        
+        print("\n" + "="*60)
+        print("Best Parameters (by BIC - recommended):")
+        print(f"  n_components = {int(best_params_bic['n_components'])}")
+        print(f"  covariance_type = {best_params_bic['covariance_type']}")
+        print(f"  BIC = {best_params_bic['bic']:.2f}")
+        print(f"  AIC = {best_params_bic['aic']:.2f}")
+        
+        print("\nBest Parameters (by AIC):")
+        print(f"  n_components = {int(best_params_aic['n_components'])}")
+        print(f"  covariance_type = {best_params_aic['covariance_type']}")
+        print(f"  BIC = {best_params_aic['bic']:.2f}")
+        print(f"  AIC = {best_params_aic['aic']:.2f}")
+        print("="*60 + "\n")
+        
+        best_params = best_params_bic  # Use BIC as default
+    else:
+        print("\n  Warning: No converged models found. Try adjusting parameters.")
+        best_params = results_df.iloc[0]
+    
+    if plot:
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        
+        for cov_type in covariance_types:
+            subset = results_df[results_df['covariance_type'] == cov_type]
+            axes[0].plot(subset['n_components'], subset['bic'], 
+                        marker='o', label=cov_type)
+            axes[1].plot(subset['n_components'], subset['aic'], 
+                        marker='o', label=cov_type)
+        
+        axes[0].set_xlabel('Number of Components')
+        axes[0].set_ylabel('BIC')
+        axes[0].set_title('BIC Scores (Lower is Better)', fontweight='bold')
+        axes[0].legend()
+        axes[0].grid(True, alpha=0.3)
+        
+        axes[1].set_xlabel('Number of Components')
+        axes[1].set_ylabel('AIC')
+        axes[1].set_title('AIC Scores (Lower is Better)', fontweight='bold')
+        axes[1].legend()
+        axes[1].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+    
+    return {
+        'results_df': results_df,
+        'best_params': best_params.to_dict(),
+        'best_n_components': int(best_params['n_components']),
+        'best_covariance_type': best_params['covariance_type']
+    }

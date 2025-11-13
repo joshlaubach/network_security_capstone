@@ -28,37 +28,83 @@ from sklearn.metrics import silhouette_score
 
 
 class ProgressGridSearchCV(GridSearchCV):
-    """GridSearchCV with tqdm progress bar."""
+    """
+    GridSearchCV with better progress reporting.
     
-    def _run_search(self, evaluate_candidates):
-        """Run search with progress bar."""
-        # Calculate total candidates from param_grid
-        from sklearn.model_selection import ParameterGrid
-        total_candidates = len(ParameterGrid(self.param_grid))
-        
-        with tqdm(total=total_candidates, desc="Grid Search Progress", 
-                  unit="config", leave=True) as pbar:
-            def evaluate_candidates_progress(candidates):
-                scores = evaluate_candidates(candidates)
-                pbar.update(len(candidates))
-                return scores
-            
-            super()._run_search(evaluate_candidates_progress)
+    Note: sklearn's GridSearchCV batches candidates for efficiency,
+    so tqdm can't show per-configuration progress. Instead, we use
+    sklearn's built-in verbose parameter which prints progress.
+    """
+    
+    def __init__(
+        self,
+        estimator,
+        param_grid,
+        *,
+        scoring=None,
+        n_jobs=None,
+        refit=True,
+        cv=None,
+        verbose=2,  # Default to verbose=2 for progress
+        pre_dispatch="2*n_jobs",
+        error_score=np.nan,
+        return_train_score=False,
+    ):
+        """Initialize with explicit parameters and verbose=2 by default."""
+        super().__init__(
+            estimator=estimator,
+            param_grid=param_grid,
+            scoring=scoring,
+            n_jobs=n_jobs,
+            refit=refit,
+            cv=cv,
+            verbose=verbose,
+            pre_dispatch=pre_dispatch,
+            error_score=error_score,
+            return_train_score=return_train_score,
+        )
 
 
 class ProgressRandomizedSearchCV(RandomizedSearchCV):
-    """RandomizedSearchCV with tqdm progress bar."""
+    """
+    RandomizedSearchCV with better progress reporting.
     
-    def _run_search(self, evaluate_candidates):
-        """Run search with progress bar."""
-        with tqdm(total=self.n_iter, desc="Randomized Search Progress", 
-                  unit="config", leave=True) as pbar:
-            def evaluate_candidates_progress(candidates):
-                scores = evaluate_candidates(candidates)
-                pbar.update(len(candidates))
-                return scores
-            
-            super()._run_search(evaluate_candidates_progress)
+    Note: sklearn's RandomizedSearchCV batches candidates for efficiency,
+    so tqdm can't show per-configuration progress. Instead, we use
+    sklearn's built-in verbose parameter which prints progress.
+    """
+    
+    def __init__(
+        self,
+        estimator,
+        param_distributions,
+        *,
+        n_iter=10,
+        scoring=None,
+        n_jobs=None,
+        refit=True,
+        cv=None,
+        verbose=2,  # Default to verbose=2 for progress
+        pre_dispatch="2*n_jobs",
+        random_state=None,
+        error_score=np.nan,
+        return_train_score=False,
+    ):
+        """Initialize with explicit parameters and verbose=2 by default."""
+        super().__init__(
+            estimator=estimator,
+            param_distributions=param_distributions,
+            n_iter=n_iter,
+            scoring=scoring,
+            n_jobs=n_jobs,
+            refit=refit,
+            cv=cv,
+            verbose=verbose,
+            pre_dispatch=pre_dispatch,
+            random_state=random_state,
+            error_score=error_score,
+            return_train_score=return_train_score,
+        )
 
 
 # ============================================================================
@@ -136,7 +182,7 @@ def tune_logistic_regression(
         f'classifier__{key}': value for key, value in param_grid.items()
     }
     
-    # Setup GridSearchCV with progress bar
+    # Setup GridSearchCV with progress reporting
     start_time = time()
     
     grid_search = ProgressGridSearchCV(
@@ -145,7 +191,7 @@ def tune_logistic_regression(
         cv=cv,
         scoring=scoring,
         n_jobs=n_jobs,
-        verbose=0,  # Suppress sklearn verbose, use our progress bar
+        # verbose=2 is set by ProgressGridSearchCV for progress updates
         return_train_score=True
     )
     
@@ -153,7 +199,9 @@ def tune_logistic_regression(
         total_combinations = np.prod([len(v) for v in param_grid.values()])
         print(f"\nSearching {total_combinations} parameter combinations...")
         print(f"Cross-validation folds: {cv}")
-        print(f"Scoring metric: {scoring}\n")
+        print(f"Scoring metric: {scoring}")
+        print(f"\nProgress (sklearn verbose output):")
+        print("-" * 60)
     
     # Fit with progress tracking
     grid_search.fit(X_train, y_train)
@@ -172,7 +220,7 @@ def tune_logistic_regression(
     ].head(10)
     
     if verbose:
-        print(f"\n✓ Completed in {elapsed_time:.1f} seconds")
+        print(f"\n[OK] Completed in {elapsed_time:.1f} seconds")
         print(f"\n[Best Parameters]")
         for param, value in best_params.items():
             print(f"  {param}: {value}")
@@ -223,7 +271,7 @@ def tune_random_forest(
     # Create base model
     rf_base = RandomForestClassifier(random_state=42, n_jobs=-1)
     
-    # Setup GridSearchCV with progress bar
+    # Setup GridSearchCV with progress reporting
     start_time = time()
     
     grid_search = ProgressGridSearchCV(
@@ -232,7 +280,7 @@ def tune_random_forest(
         cv=cv,
         scoring=scoring,
         n_jobs=n_jobs,
-        verbose=0,
+        # verbose=2 is set by ProgressGridSearchCV for progress updates
         return_train_score=True
     )
     
@@ -240,7 +288,9 @@ def tune_random_forest(
         total_combinations = np.prod([len(v) for v in param_grid.values()])
         print(f"\nSearching {total_combinations} parameter combinations...")
         print(f"Cross-validation folds: {cv}")
-        print(f"Scoring metric: {scoring}\n")
+        print(f"Scoring metric: {scoring}")
+        print(f"\nProgress (sklearn verbose output):")
+        print("-" * 60)
     
     # Fit with progress tracking
     grid_search.fit(X_train, y_train)
@@ -258,7 +308,7 @@ def tune_random_forest(
     ].head(10)
     
     if verbose:
-        print(f"\n✓ Completed in {elapsed_time:.1f} seconds")
+        print(f"\n[OK] Completed in {elapsed_time:.1f} seconds")
         print(f"\n[Best Parameters]")
         for param, value in best_params.items():
             print(f"  {param}: {value}")
@@ -325,7 +375,7 @@ def tune_xgboost(
         eval_metric='logloss'
     )
     
-    # Setup RandomizedSearchCV with progress bar
+    # Setup RandomizedSearchCV with progress reporting
     start_time = time()
     
     random_search = ProgressRandomizedSearchCV(
@@ -335,7 +385,7 @@ def tune_xgboost(
         cv=cv,
         scoring=scoring,
         n_jobs=n_jobs,
-        verbose=0,
+        # verbose=2 is set by ProgressRandomizedSearchCV for progress updates
         random_state=42,
         return_train_score=True
     )
@@ -343,7 +393,9 @@ def tune_xgboost(
     if verbose:
         print(f"\nTesting {n_iter} random parameter combinations...")
         print(f"Cross-validation folds: {cv}")
-        print(f"Scoring metric: {scoring}\n")
+        print(f"Scoring metric: {scoring}")
+        print(f"\nProgress (sklearn verbose output):")
+        print("-" * 60)
     
     # Fit with progress tracking
     random_search.fit(X_train, y_train)
@@ -361,7 +413,7 @@ def tune_xgboost(
     ].head(10)
     
     if verbose:
-        print(f"\n✓ Completed in {elapsed_time:.1f} seconds")
+        print(f"\n[OK] Completed in {elapsed_time:.1f} seconds")
         print(f"\n[Best Parameters]")
         for param, value in best_params.items():
             print(f"  {param}: {value}")
@@ -483,7 +535,7 @@ def tune_kmeans(
     results_df = results_df.sort_values('silhouette_score', ascending=False)
     
     if verbose:
-        print(f"\n✓ Completed in {elapsed_time:.1f} seconds")
+        print(f"\n[OK] Completed in {elapsed_time:.1f} seconds")
         print(f"\n[Best Parameters]")
         for param, value in best_params.items():
             print(f"  {param}: {value}")
@@ -590,7 +642,7 @@ def tune_dbscan(
         results_df = results_df.sort_values('silhouette_score', ascending=False)
     
     if verbose:
-        print(f"\n✓ Completed in {elapsed_time:.1f} seconds")
+        print(f"\n[OK] Completed in {elapsed_time:.1f} seconds")
         print(f"\n[Best Parameters]")
         for param, value in best_params.items():
             print(f"  {param}: {value}")
@@ -709,7 +761,7 @@ def tune_gmm(
     converged_df = converged_df.sort_values('bic')
     
     if verbose:
-        print(f"\n✓ Completed in {elapsed_time:.1f} seconds")
+        print(f"\n[OK] Completed in {elapsed_time:.1f} seconds")
         print(f"\n[Best Parameters]")
         for param, value in best_params.items():
             print(f"  {param}: {value}")

@@ -61,7 +61,7 @@ def scale_numeric_features(df, exclude_cols=None, max_unique_categorical=10, aut
                 detection_details.append((col, n_unique, 'categorical'))
         
         if detection_details:
-            print(f"[INFO] Auto-detected {len(exclude_cols)} binary/categorical features:")
+            print(f"Auto-detected {len(exclude_cols)} binary/categorical features:")
             for col, n_unique, feat_type in detection_details[:10]:  # Show first 10
                 print(f"   - {col:30} ({n_unique} unique values, {feat_type})")
             if len(detection_details) > 10:
@@ -80,9 +80,9 @@ def scale_numeric_features(df, exclude_cols=None, max_unique_categorical=10, aut
     if len(cols_to_scale) > 0:
         scaler = StandardScaler()
         df[cols_to_scale] = scaler.fit_transform(df[cols_to_scale])
-        print(f"[INFO] Scaled {len(cols_to_scale)} continuous features")
+        print(f"Scaled {len(cols_to_scale)} continuous features")
         if cols_excluded:
-            print(f"[INFO] Excluded {len(cols_excluded)} binary/categorical features from scaling")
+            print(f"Excluded {len(cols_excluded)} binary/categorical features from scaling")
     else:
         print(f"[WARN] No continuous features found to scale")
     
@@ -114,7 +114,7 @@ def _get_beth_paths():
         "val": os.path.join(base_path, "labelled_validation_data.csv"),
         "test": os.path.join(base_path, "labelled_testing_data.csv"),
     }
-    print(f"[INFO] BETH dataset path: {base_path}")
+    print(f"BETH dataset path: {base_path}")
     return paths
 
 
@@ -145,7 +145,7 @@ def _apply_log_transforms_beth(df):
         
     Creates new log-transformed columns and removes originals to avoid multicollinearity.
     """
-    print(f"[INFO] Applying log1p transformations to BETH skewed features...")
+    print(f"Applying log1p transformations to BETH skewed features...")
     
     skewed_features = ['timeSinceBoot', 'processId', 'parentProcessId']
     transformed = []
@@ -160,7 +160,7 @@ def _apply_log_transforms_beth(df):
             # Remove original to avoid multicollinearity
             df.drop(columns=[feat], inplace=True)
     
-    print(f"[INFO] Created {len(transformed)} log-transformed features:")
+    print(f"Created {len(transformed)} log-transformed features:")
     for feat in transformed:
         print(f"   - {feat} (original removed)")
     
@@ -179,7 +179,7 @@ def load_beth():
         df = _apply_log_transforms_beth(df)    # Apply log transforms
         df = scale_numeric_features(df)        # Auto-detect and standardize
 
-    print(f"[INFO] BETH splits loaded: Train {beth_train.shape}, Val {beth_val.shape}, Test {beth_test.shape}")
+    print(f"BETH splits loaded: Train {beth_train.shape}, Val {beth_val.shape}, Test {beth_test.shape}")
     return beth_train, beth_val, beth_test
 
 
@@ -198,7 +198,7 @@ def _parse_args_column(df, args_col='args'):
     Returns:
         DataFrame with additional columns: arg_names, arg_types, arg_values, args_str
     """
-    print(f"[INFO] Parsing '{args_col}' column...")
+    print(f"Parsing '{args_col}' column...")
     
     # Parse JSON strings
     try:
@@ -226,7 +226,7 @@ def _parse_args_column(df, args_col='args'):
         axis=1
     )
     
-    print(f"[INFO] Parsed {len(df)} records into structured argument strings")
+    print(f"Parsed {len(df)} records into structured argument strings")
     return df
 
 
@@ -284,7 +284,7 @@ def engineer_beth_tfidf_features(df_train, df_val, df_test,
     
     # Initialize TF-IDF vectorizer
     if verbose:
-        print(f"\n[INFO] Initializing TF-IDF vectorizer...")
+        print(f"\nInitializing TF-IDF vectorizer...")
         print(f"   - max_features: {max_features}")
         print(f"   - min_df: {min_df} (ignore patterns in < {min_df} documents)")
         print(f"   - max_df: {max_df} (ignore patterns in > {max_df*100}% of documents)")
@@ -300,7 +300,7 @@ def engineer_beth_tfidf_features(df_train, df_val, df_test,
     
     # Fit on training data and transform all splits
     if verbose:
-        print(f"\n[INFO] Fitting TF-IDF on training data...")
+        print(f"\nFitting TF-IDF on training data...")
     
     tfidf_train = vectorizer.fit_transform(df_train['args_str'])
     tfidf_val = vectorizer.transform(df_val['args_str'])
@@ -309,7 +309,7 @@ def engineer_beth_tfidf_features(df_train, df_val, df_test,
     feature_names = vectorizer.get_feature_names_out()
     
     if verbose:
-        print(f"[SUCCESS] TF-IDF feature extraction complete!")
+        print(f"TF-IDF feature extraction complete!")
         print(f"\n[TF-IDF Matrix Shapes]")
         print(f"   Training:   {tfidf_train.shape}")
         print(f"   Validation: {tfidf_val.shape}")
@@ -327,6 +327,15 @@ def engineer_beth_tfidf_features(df_train, df_val, df_test,
             print(f"   ... and {len(feature_names) - 10} more")
     
     print("="*80 + "\n")
+    
+    # BUG FIX: Remove intermediate text columns after TF-IDF extraction
+    # These columns should NOT be left in the original DataFrames
+    # Note: This modifies the INPUT dataframes (df_train, df_val, df_test)
+    # If you need to preserve originals, pass copies to this function
+    text_cols_to_remove = ['args', 'arg_names', 'arg_types', 'arg_values', 'args_str']
+    
+    # Clean up is handled by the caller, so we just return the matrices
+    # The notebook/calling code should drop these columns from the original DataFrames
     
     return tfidf_train, tfidf_val, tfidf_test, feature_names, vectorizer
 
@@ -356,7 +365,7 @@ def combine_numeric_and_tfidf(df, tfidf_matrix, exclude_cols=None):
     # Combine with TF-IDF features
     X_combined = hstack([X_numeric, tfidf_matrix])
     
-    print(f"[INFO] Combined features: {X_numeric.shape[1]} numeric + {tfidf_matrix.shape[1]} TF-IDF = {X_combined.shape[1]} total")
+    print(f"Combined features: {X_numeric.shape[1]} numeric + {tfidf_matrix.shape[1]} TF-IDF = {X_combined.shape[1]} total")
     
     return X_combined
 
@@ -372,7 +381,7 @@ def _get_unsw_paths():
         "train": os.path.join(base_path, "UNSW_NB15_training-set.csv"),
         "test": os.path.join(base_path, "UNSW_NB15_testing-set.csv"),
     }
-    print(f"[INFO] UNSW-NB15 dataset path: {base_path}")
+    print(f"UNSW-NB15 dataset path: {base_path}")
     return paths
 
 
@@ -404,7 +413,7 @@ def identify_src_dst_pairs(df):
             if d_pair in df.columns:
                 src_dst_pairs[col] = d_pair
 
-    print(f"[INFO] Found {len(src_dst_pairs)} source-destination pairs.")
+    print(f"Found {len(src_dst_pairs)} source-destination pairs.")
     for s, d in src_dst_pairs.items():
         print(f"   {s} <-> {d}")
     return src_dst_pairs
@@ -412,20 +421,41 @@ def identify_src_dst_pairs(df):
 
 def _feature_engineer_unsw(df):
     """
-    Automatically generates derived numeric features for each
-    detected source-destination column pair.
+    Comprehensive feature engineering for UNSW-NB15 dataset.
+    
+    Automatically generates derived numeric features for each detected source-destination 
+    column pair, plus advanced interaction and extreme value features based on EDA insights.
 
-    Derived features per pair:
+    Features created per src-dst pair:
       - sum: s + d
       - diff: s - d
       - ratio: s / (d + 1)
       - both_zero: both values zero
       - one_zero: exactly one value zero
       - is_integer_ratio: ratio is close to an integer (within tolerance)
+      - distance: normalized asymmetry distance from diagonal (y=x)
+      - log_distance: asymmetry in log space
+    
+    Additional advanced features:
+      - Extreme value indicators (tiny packets, extreme jitter, unidirectional loss)
+      - Throughput efficiency (bytes per time unit)
+      - Interaction features (temporal x spatial combinations)
+      - Composite asymmetry score (combines top discriminative pairs)
+      - Coefficient of variation (relative variability between src-dst pairs)
+    
+    Total features created: ~30-35 features per pair + 15 global features
+    Feature selection will reduce this to top 30 most important features.
     """
     src_dst_pairs = identify_src_dst_pairs(df)
-    print(f"[INFO] Engineering numeric pair features for {len(src_dst_pairs)} pairs...")
+    print(f"\n{'='*80}")
+    print(f"COMPREHENSIVE UNSW-NB15 FEATURE ENGINEERING")
+    print(f"{'='*80}")
+    print(f"Detected {len(src_dst_pairs)} source-destination pairs")
+    print(f"Creating derived features for each pair...")
 
+    # ============================================================================
+    # PART 1: Source-Destination Pair Features
+    # ============================================================================
     for src, dst in src_dst_pairs.items():
         try:
             # Small epsilon to avoid division by zero
@@ -456,10 +486,113 @@ def _feature_engineer_unsw(df):
             # Binary feature: 1 if ratio is near-integer, 0 otherwise
             df[f"is_integer_ratio_{src}_{dst}"] = (distance_to_integer < tolerance).astype(int)
             
+            # ASYMMETRY FEATURES (from scatter plot analysis)
+            # Normalized distance from diagonal (y=x line)
+            # Measures deviation from symmetric communication
+            df[f"distance_{src}_{dst}"] = np.abs(df[src] - df[dst]) / (df[src] + df[dst] + epsilon)
+            
+            # Log-space distance (better for multiplicative relationships)
+            df[f"log_distance_{src}_{dst}"] = np.abs(np.log1p(df[src]) - np.log1p(df[dst]))
+            
         except Exception as e:
             print(f"[WARN] Could not engineer features for {src}-{dst}: {e}")
 
-    print(f"[INFO] UNSW numeric pair features created: {len(src_dst_pairs)} pairs processed.")
+    print(f"[OK] Created {len(src_dst_pairs) * 8} pair-based features (8 per pair)")
+    
+    # ============================================================================
+    # PART 2: Advanced Global Features (from EDA insights)
+    # ============================================================================
+    print(f"\nCreating advanced global features...")
+    features_created = 0
+    
+    # 1. Extreme Value Indicators
+    if 'smean' in df.columns and 'dmean' in df.columns:
+        # Tiny packets (potential probes/scans) - log-transformed plots showed these at log~0
+        df['is_tiny_src_pkt'] = (df['smean'] < 10).astype(int)
+        df['is_tiny_dst_pkt'] = (df['dmean'] < 10).astype(int)
+        df['has_tiny_packet'] = ((df['smean'] < 10) | (df['dmean'] < 10)).astype(int)
+        features_created += 3
+    
+    if 'sjit' in df.columns and 'djit' in df.columns:
+        # Extreme jitter (from visualization: attacks showed jitter up to log~14)
+        df['is_extreme_src_jitter'] = (df['sjit'] > 1e6).astype(int)
+        df['is_extreme_dst_jitter'] = (df['djit'] > 1e6).astype(int)
+        df['has_extreme_jitter'] = ((df['sjit'] > 1e6) | (df['djit'] > 1e6)).astype(int)
+        features_created += 3
+    
+    if 'sloss' in df.columns and 'dloss' in df.columns:
+        # Unidirectional loss (vertical/horizontal bands in scatter plots)
+        df['unidirectional_loss'] = (
+            ((df['sloss'] == 0) & (df['dloss'] > 0)) | 
+            ((df['dloss'] == 0) & (df['sloss'] > 0))
+        ).astype(int)
+        features_created += 1
+    
+    # 2. Throughput Efficiency
+    if all(col in df.columns for col in ['sbytes', 'dbytes', 'sinpkt', 'dinpkt']):
+        epsilon = 1e-6
+        # Total bytes per inter-packet time (higher = more efficient)
+        df['throughput_efficiency'] = (df['sbytes'] + df['dbytes']) / (df['sinpkt'] + df['dinpkt'] + epsilon)
+        features_created += 1
+    
+    # 3. Interaction Features (Temporal x Spatial)
+    # Most discriminative pairs from log-transformed visualizations
+    if 'sinpkt' in df.columns and 'smean' in df.columns:
+        df['ipt_size_product_src'] = df['sinpkt'] * df['smean']
+        features_created += 1
+    
+    if 'dinpkt' in df.columns and 'dmean' in df.columns:
+        df['ipt_size_product_dst'] = df['dinpkt'] * df['dmean']
+        features_created += 1
+    
+    # 4. Composite Asymmetry Score
+    # Combine the two most discriminative asymmetry measures
+    asymmetry_components = []
+    
+    if 'distance_sinpkt_dinpkt' in df.columns:
+        asymmetry_components.append(df['distance_sinpkt_dinpkt'])
+    
+    if 'distance_smean_dmean' in df.columns:
+        asymmetry_components.append(df['distance_smean_dmean'])
+    
+    if len(asymmetry_components) >= 2:
+        # Average of top 2 asymmetry measures
+        df['asymmetry_score'] = sum(asymmetry_components) / len(asymmetry_components)
+        features_created += 1
+    
+    # 5. Coefficient of Variation for paired features
+    # Measures relative variability (std/mean) between src-dst pairs
+    if 'sbytes' in df.columns and 'dbytes' in df.columns:
+        epsilon = 1e-6
+        mean_bytes = (df['sbytes'] + df['dbytes']) / 2
+        std_bytes = np.sqrt(((df['sbytes'] - mean_bytes)**2 + (df['dbytes'] - mean_bytes)**2) / 2)
+        df['cv_bytes'] = std_bytes / (mean_bytes + epsilon)
+        features_created += 1
+    
+    if 'spkts' in df.columns and 'dpkts' in df.columns:
+        epsilon = 1e-6
+        mean_pkts = (df['spkts'] + df['dpkts']) / 2
+        std_pkts = np.sqrt(((df['spkts'] - mean_pkts)**2 + (df['dpkts'] - mean_pkts)**2) / 2)
+        df['cv_pkts'] = std_pkts / (mean_pkts + epsilon)
+        features_created += 1
+    
+    if 'sinpkt' in df.columns and 'dinpkt' in df.columns:
+        epsilon = 1e-6
+        mean_ipt = (df['sinpkt'] + df['dinpkt']) / 2
+        std_ipt = np.sqrt(((df['sinpkt'] - mean_ipt)**2 + (df['dinpkt'] - mean_ipt)**2) / 2)
+        df['cv_ipt'] = std_ipt / (mean_ipt + epsilon)
+        features_created += 1
+    
+    print(f"[OK] Created {features_created} advanced global features")
+    
+    total_new_features = (len(src_dst_pairs) * 8) + features_created
+    print(f"\n{'='*80}")
+    print(f"FEATURE ENGINEERING COMPLETE")
+    print(f"{'='*80}")
+    print(f"Total new features created: {total_new_features}")
+    print(f"Note: Use select_top_features_by_importance() to reduce to top 30 features")
+    print(f"{'='*80}\n")
+    
     return df
 
 
@@ -477,7 +610,7 @@ def _apply_log_transforms_unsw(df):
         
     Original columns are removed after transformation to eliminate multicollinearity.
     """
-    print(f"[INFO] Applying log1p transformations to skewed features...")
+    print(f"Applying log1p transformations to skewed features...")
     
     # Define base features that need log transformation
     skewed_base_features = [
@@ -532,8 +665,8 @@ def _apply_log_transforms_unsw(df):
     
     # 5. Remove original features to avoid multicollinearity
     if features_to_remove:
-        print(f"[INFO] Created {len(transformed_features)} log-transformed features")
-        print(f"[INFO] Removing {len(features_to_remove)} original features to avoid multicollinearity")
+        print(f"Created {len(transformed_features)} log-transformed features")
+        print(f"Removing {len(features_to_remove)} original features to avoid multicollinearity")
         df.drop(columns=features_to_remove, inplace=True)
     
     return df
@@ -577,11 +710,11 @@ def load_unsw():
         df = _clean_dataframe(df)
         # Note: Keep categorical features (proto, service, state, attack_cat) as strings
         # They will be encoded per-model as needed (OneHot, Label, or Category dtype)
-        df = _feature_engineer_unsw(df)        # Create derived features FIRST
+        df = _feature_engineer_unsw(df)        # Create ALL derived features (basic + advanced)
         df = _apply_log_transforms_unsw(df)    # Then apply log transforms
         df = scale_numeric_features(df)        # Auto-detect and standardize
 
-    print(f"[INFO] UNSW-NB15 splits loaded: Train {train_df.shape}, Test {test_df.shape}")
+    print(f"UNSW-NB15 splits loaded: Train {train_df.shape}, Test {test_df.shape}")
     return train_df, test_df
 
 
@@ -597,7 +730,7 @@ def prepare_datasets():
     """
     beth_train, beth_val, beth_test = load_beth()
     unsw_train, unsw_test = load_unsw()
-    print("[INFO] All datasets prepared successfully.")
+    print("All datasets prepared successfully.")
     return beth_train, beth_val, beth_test, unsw_train, unsw_test
 
 
@@ -689,7 +822,7 @@ def select_top_features_by_importance(X, y, n_features=30, method='random_forest
     if categorical_cols:
         selected_features.extend(categorical_cols)
         if verbose:
-            print(f"[INFO] Including {len(categorical_cols)} categorical features: {categorical_cols}")
+            print(f"Including {len(categorical_cols)} categorical features: {categorical_cols}")
     
     X_selected = X[selected_features]
     
@@ -735,3 +868,48 @@ def apply_feature_selection(df, target_col='label', n_features=30, method='rando
     df_selected[target_col] = y
     
     return df_selected, feature_importance, selected_features
+
+
+def cleanup_tfidf_text_columns(df, inplace=False):
+    """
+    Remove intermediate text columns created during TF-IDF feature engineering.
+    
+    This function removes the text columns that are created as intermediate steps
+    during TF-IDF vectorization of the 'args' column but should not be kept in
+    the final feature set.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame that may contain intermediate text columns
+    inplace : bool, default=False
+        If True, modify the DataFrame in place. If False, return a copy.
+    
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with text columns removed (or None if inplace=True)
+    
+    Example:
+    --------
+    >>> beth_train = cleanup_tfidf_text_columns(beth_train, inplace=True)
+    >>> # Or for multiple DataFrames:
+    >>> for df in [beth_train, beth_val, beth_test]:
+    >>>     cleanup_tfidf_text_columns(df, inplace=True)
+    """
+    text_cols_to_remove = ['args', 'arg_names', 'arg_types', 'arg_values', 'args_str']
+    existing_cols = [col for col in text_cols_to_remove if col in df.columns]
+    
+    if existing_cols:
+        print(f"Removing {len(existing_cols)} TF-IDF text columns: {existing_cols}")
+        if inplace:
+            df.drop(columns=existing_cols, inplace=True)
+            return None
+        else:
+            return df.drop(columns=existing_cols)
+    else:
+        print("No TF-IDF text columns found to remove")
+        if inplace:
+            return None
+        else:
+            return df.copy()

@@ -37,7 +37,7 @@ def set_seed(seed=42):
         torch.cuda.manual_seed_all(seed)
     except ImportError:
         pass
-    print(f"[INFO] Random seed set to {seed}")
+    print(f"Random seed set to {seed}")
 
 
 # ----------------------------------------

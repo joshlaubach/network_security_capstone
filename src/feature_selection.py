@@ -72,7 +72,7 @@ def variance_threshold_selection(X, y=None, threshold=0.01, verbose=True):
         numeric_cols = X.select_dtypes(include=[np.number]).columns
         if len(numeric_cols) < len(X.columns):
             if verbose:
-                print(f"[INFO] Filtering to {len(numeric_cols)} numeric columns (excluded {len(X.columns) - len(numeric_cols)} non-numeric)")
+                print(f"Filtering to {len(numeric_cols)} numeric columns (excluded {len(X.columns) - len(numeric_cols)} non-numeric)")
         X_numeric = X[numeric_cols]
     else:
         X_numeric = X
@@ -127,7 +127,7 @@ def correlation_selection(X, y=None, threshold=0.95, verbose=True):
     numeric_cols = X.select_dtypes(include=[np.number]).columns
     if len(numeric_cols) < len(X.columns):
         if verbose:
-            print(f"[INFO] Filtering to {len(numeric_cols)} numeric columns (excluded {len(X.columns) - len(numeric_cols)} non-numeric)")
+            print(f"Filtering to {len(numeric_cols)} numeric columns (excluded {len(X.columns) - len(numeric_cols)} non-numeric)")
     X_numeric = X[numeric_cols]
     
     # Compute correlation matrix
@@ -229,7 +229,7 @@ def univariate_selection(X, y, score_func='f_classif', k=20, verbose=True):
         numeric_cols = X.select_dtypes(include=[np.number]).columns
         if len(numeric_cols) < len(X.columns):
             if verbose:
-                print(f"[INFO] Filtering to {len(numeric_cols)} numeric columns (excluded {len(X.columns) - len(numeric_cols)} non-numeric)")
+                print(f"Filtering to {len(numeric_cols)} numeric columns (excluded {len(X.columns) - len(numeric_cols)} non-numeric)")
         X_numeric = X[numeric_cols]
         feature_names = numeric_cols
     else:
@@ -309,7 +309,7 @@ def rfe_selection(X, y, estimator=None, n_features_to_select=20, step=1, verbose
         numeric_cols = X.select_dtypes(include=[np.number]).columns
         if len(numeric_cols) < len(X.columns):
             if verbose:
-                print(f"[INFO] Filtering to {len(numeric_cols)} numeric columns (excluded {len(X.columns) - len(numeric_cols)} non-numeric)")
+                print(f"Filtering to {len(numeric_cols)} numeric columns (excluded {len(X.columns) - len(numeric_cols)} non-numeric)")
         X_numeric = X[numeric_cols]
         feature_names = numeric_cols
     else:
@@ -386,7 +386,7 @@ def model_based_selection(X, y, estimator=None, threshold='median', verbose=True
         numeric_cols = X.select_dtypes(include=[np.number]).columns
         if len(numeric_cols) < len(X.columns):
             if verbose:
-                print(f"[INFO] Filtering to {len(numeric_cols)} numeric columns (excluded {len(X.columns) - len(numeric_cols)} non-numeric)")
+                print(f"Filtering to {len(numeric_cols)} numeric columns (excluded {len(X.columns) - len(numeric_cols)} non-numeric)")
         X_numeric = X[numeric_cols]
         feature_names = numeric_cols
     else:
@@ -464,7 +464,7 @@ def lasso_selection(X, y, verbose=True):
         numeric_cols = X.select_dtypes(include=[np.number]).columns
         if len(numeric_cols) < len(X.columns):
             if verbose:
-                print(f"[INFO] Filtering to {len(numeric_cols)} numeric columns (excluded {len(X.columns) - len(numeric_cols)} non-numeric)")
+                print(f"Filtering to {len(numeric_cols)} numeric columns (excluded {len(X.columns) - len(numeric_cols)} non-numeric)")
         X_numeric = X[numeric_cols]
         feature_names = numeric_cols
     else:
@@ -546,7 +546,7 @@ def forward_selection(X, y, estimator=None, n_features_to_select=20, cv=3,
     if len(X_numeric.columns) < len(X.columns):
         dropped = len(X.columns) - len(X_numeric.columns)
         if verbose:
-            print(f"  ⚠️  Dropped {dropped} non-numeric features")
+            print(f"    Dropped {dropped} non-numeric features")
     
     # Default estimator
     if estimator is None:
@@ -582,7 +582,7 @@ def forward_selection(X, y, estimator=None, n_features_to_select=20, cv=3,
     }).sort_values('rank')
     
     if verbose:
-        print(f"\n  ✓ Forward selection complete!")
+        print(f"\n  [OK] Forward selection complete!")
         print(f"  Features selected: {len(selected_features)}")
     
     return X_selected, selector, ranking_df
@@ -624,7 +624,7 @@ def backward_selection(X, y, estimator=None, n_features_to_select=20, cv=3,
     if len(X_numeric.columns) < len(X.columns):
         dropped = len(X.columns) - len(X_numeric.columns)
         if verbose:
-            print(f"  ⚠️  Dropped {dropped} non-numeric features")
+            print(f"    Dropped {dropped} non-numeric features")
     
     # Default estimator
     if estimator is None:
@@ -660,7 +660,7 @@ def backward_selection(X, y, estimator=None, n_features_to_select=20, cv=3,
     }).sort_values('rank')
     
     if verbose:
-        print(f"\n  ✓ Backward selection complete!")
+        print(f"\n  [OK] Backward selection complete!")
         print(f"  Features selected: {len(selected_features)}")
     
     return X_selected, selector, ranking_df
@@ -877,7 +877,7 @@ def comprehensive_feature_selection(X_train, y_train, n_features=30,
     if not skip_backward:
         if verbose:
             print("\n[OPTIONAL] Running Backward Selection...")
-            print("   ⚠️  Warning: This may take 20+ minutes with LogisticRegression")
+            print("     Warning: This may take 20+ minutes with LogisticRegression")
         
         fast_estimator = LogisticRegression(max_iter=1000, random_state=42, n_jobs=-1)
         X_train_backward, backward_selector, backward_ranking = backward_selection(
