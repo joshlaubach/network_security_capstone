@@ -19,8 +19,6 @@ The goal: build a reproducible, end-to-end data science pipeline that detects an
 1. **Technical Report (18–25 pages)** – detailed methods, modeling, and evaluation for a data-science audience.  
 2. **Non-technical Report (8–12 pages)** – executive summary and actionable insights for stakeholders.  
 
-Together they comprise 100 points (50% of course grade).
-
 ---
 
 ## Problem Definition
