@@ -19,6 +19,8 @@ The goal: build a reproducible, end-to-end data science pipeline that detects an
 1. **Technical Report (18–25 pages)** – detailed methods, modeling, and evaluation for a data-science audience.  
 2. **Non-technical Report (8–12 pages)** – executive summary and actionable insights for stakeholders.  
 
+Together they comprise 100 points (50% of course grade).
+
 ---
 
 ## Problem Definition
@@ -117,6 +119,7 @@ Execute notebooks in order:
 2. **02_beth_unsupervised.ipynb** - Anomaly detection with K-Means, DBSCAN, GMM
 3. **03_unsw_supervised.ipynb** - Classification with Logistic Regression, Random Forest, XGBoost
 4. **04_results_comparison.ipynb** - Cross-dataset comparison and final insights
+5. **05_presentation_visuals.ipynb** - Publication-ready figures and final presentation materials
 
 ---
 
@@ -124,10 +127,17 @@ Execute notebooks in order:
 
 **Supervised Classification (UNSW-NB15):**
 - Best model: Random Forest
-- Accuracy: 90.40%
-- Precision: 98.70%
-- Recall: 87.04%
-- F1-Score: 92.50%
+- Accuracy: 90.61%
+- Precision: 98.69%
+- Recall: 87.36%
+- F1-Score: 92.68%
+
+**Model Comparison:**
+| Model | Accuracy | Precision | Recall | F1-Score |
+|-------|----------|-----------|--------|----------|
+| Logistic Regression | 87.42% | 98.16% | 83.07% | 89.99% |
+| Random Forest | 90.61% | 98.69% | 87.36% | 92.68% |
+| XGBoost | 90.05% | 98.94% | 86.31% | 92.19% |
 
 **Unsupervised Anomaly Detection (BETH):**
 - Best clustering method: DBSCAN (Enhanced with TF-IDF)
@@ -136,13 +146,27 @@ Execute notebooks in order:
 - Recall: 99.87%
 - F1-Score: 97.84%
 - False positive rate: 41.80%
+- True negative rate: 58.20%
+
+**BETH Model Comparison:**
+| Model | Feature Set | Accuracy | Precision | Recall | F1-Score | FPR |
+|-------|-------------|----------|-----------|--------|----------|-----|
+| DBSCAN (Baseline) | Numeric Only | 94.32% | 99.67% | 94.05% | 96.78% | 3.06% |
+| DBSCAN (Enhanced) | Numeric + TF-IDF | 96.01% | 95.90% | 99.87% | 97.84% | 41.80% |
+| K-Means (Enhanced) | Numeric + TF-IDF | 93.28% | 98.10% | 94.42% | 96.22% | 17.91% |
 
 **Feature Engineering Impact:**
 - Original features: 49 (UNSW), 17 base (BETH)
 - Engineered features: 118 (UNSW), 500+ with TF-IDF (BETH)
-- After selection: 30 (UNSW), 25 (BETH)
+- After selection: 30 (UNSW), 50 (BETH)
+- Dimensionality reduction: 75.21% (UNSW)
 - Performance retention: >99%
-- Training time reduction: 46% (UNSW), 60-70% (BETH)
+
+**Two-Stage Pipeline (UNSW-NB15):**
+- Stage 1: Binary attack detection (Normal vs Attack)
+- Stage 2: Multi-class attack type classification
+- End-to-end accuracy: 74.74%
+- Realistic security operations workflow
 
 ---
 
